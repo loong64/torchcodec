@@ -1,0 +1,70 @@
+diff --git a/src/torchcodec/_core/CMakeLists.txt b/src/torchcodec/_core/CMakeLists.txt
+index dd3d3e1..a984c3c 100644
+--- a/src/torchcodec/_core/CMakeLists.txt
++++ b/src/torchcodec/_core/CMakeLists.txt
+@@ -4,9 +4,18 @@ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ 
+ set(PYBIND11_FINDPYTHON ON)
++
++if(NOT pybind11_DIR)
++    execute_process(
++        COMMAND python3 -m pybind11 --cmakedir
++        OUTPUT_VARIABLE pybind11_DIR
++        OUTPUT_STRIP_TRAILING_WHITESPACE
++    )
++endif()
++
+ find_package(pybind11 REQUIRED)
+ find_package(Torch REQUIRED)
+-find_package(Python3 ${PYTHON_VERSION} EXACT COMPONENTS Development Interpreter)
++find_package(Python3 ${PYTHON_VERSION} EXACT COMPONENTS Development.Module Interpreter)
+ 
+ # Read a list variable from sources.bzl, the single source of truth for the
+ # _core C++ source files shared with the internal Buck build. The .bzl file is
+diff --git a/src/torchcodec/_core/fetch_and_expose_non_gpl_ffmpeg_libs.cmake b/src/torchcodec/_core/fetch_and_expose_non_gpl_ffmpeg_libs.cmake
+index b2f5cb0..0ae5c70 100644
+--- a/src/torchcodec/_core/fetch_and_expose_non_gpl_ffmpeg_libs.cmake
++++ b/src/torchcodec/_core/fetch_and_expose_non_gpl_ffmpeg_libs.cmake
+@@ -11,7 +11,7 @@ include(FetchContent)
+ 
+ set(
+     base_url
+-    https://pytorch.s3.amazonaws.com/torchcodec/ffmpeg/2025-03-14
++    https://github.com/loong64/torchcodec/raw/refs/heads/ffmpeg/2025-03-14
+ )
+ 
+ if (LINUX)
+@@ -41,6 +41,32 @@ if (LINUX)
+             f8_sha256
+             b9cfd99ae75a14e58300854967d4dc49de0b3daa551df51ea1f52a3f08d2c8af
+         )
++    elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "loongarch64")
++        set(
++            platform_url
++            ${base_url}/linux_loongarch64
++        )
++
++        set(
++            f4_sha256
++            2fda386dce5ccb8bf4e9d908c712eebba1e9208fa770955a51063318d1903cb7
++        )
++        set(
++            f5_sha256
++            3325ae6326d61ec19d7bb853dde3eb6695326f2756b8631a4ceb80d837980603
++        )
++        set(
++            f6_sha256
++            636366bbb42893567eeead1b728588c9e88636fa5cfe53d01dbdbd1d911d7bec
++        )
++        set(
++            f7_sha256
++            0fbc8023e0e11eef29adff0917b55d602a2a97ff954ce1e2c91c90b8ccb98136
++        )
++        set(
++            f8_sha256
++            6cf303ef13a0a9f3e4119696936810bca22218cf38fb40069c319dbbf4e9cd80
++        )
+     elseif (LINUX)  # assume x86_64
+         set(
+             platform_url

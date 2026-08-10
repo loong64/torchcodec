@@ -1,0 +1,146 @@
+name: build (torchcodec)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 0 * * *
+
+jobs:
+  check:
+    runs-on: ubuntu-slim
+    outputs:
+      create: ${{ steps.check_release.outputs.create }}
+      version: ${{ steps.get_version.outputs.version }}
+    strategy:
+      matrix:
+        app: ['torchcodec']
+        repo: ['meta-pytorch/torchcodec']
+    steps:
+      - name: Check version
+        id: get_version
+        run: |
+          version=$(curl -s "https://api.github.com/repos/${{ matrix.repo }}/releases/latest" | jq -r .tag_name)
+          if [ -z "${version}" ] || [ "${version}" == "null" ]; then
+            echo "Failed to get version"
+            exit 1
+          fi
+
+          echo "version=${version}" >> $GITHUB_ENV
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          echo ""
+          echo "========== Build Args =========="
+          echo "TorchCodec current version: ${version}"
+
+      - name: Check pytorch
+        run: |
+          version=$(curl -s "https://api.github.com/repos/pytorch/pytorch/releases/latest" | jq -r .tag_name)
+          if [ -z "${version}" ] || [ "${version}" == "null" ]; then
+            echo "Failed to get version"
+            exit 1
+          fi
+          echo "PyTorch current version: ${version}"
+          gh release view ${version} -R https://github.com/loong64/pytorch | grep torch-.*.whl >/dev/null 2>&1 || exit 1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check release
+        id: check_release
+        run: |
+          gh release view ${version} -R ${{ github.repository }} >/dev/null 2>&1 || echo "create=1" >> $GITHUB_ENV
+          gh release view ${version} -R ${{ github.repository }} | grep ${{ matrix.app }}-.*.whl >/dev/null 2>&1 || echo "create=1" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v7
+        if: env.create == '1'
+
+      - name: Create tag
+        if: env.create == '1'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ env.version }} || true
+          git push origin ${{ env.version }} || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release
+        if: env.create == '1'
+        run: |
+          gh release create ${{ env.version }} -R ${{ github.repository }} --title "TorchCodec ${version/v/}" --notes "**Full Changelog**: [${{ env.version }}](https://github.com/${{ matrix.repo }}/releases/tag/${{ env.version }})" || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    runs-on: ubuntu-latest
+    needs: check
+    if: needs.check.outputs.create == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ['torchcodec']
+        platform: ['cp310-manylinux_loongarch64', 'cp311-manylinux_loongarch64', 'cp312-manylinux_loongarch64', 'cp313-manylinux_loongarch64', 'cp314-manylinux_loongarch64', 'cp314t-manylinux_loongarch64']
+    steps:
+      - name: Get version
+        run: |
+          app_version=${{ needs.check.outputs.version }}
+          echo "BUILD_VERSION=${app_version/v/}" >> $GITHUB_ENV
+
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          repository: meta-pytorch/torchcodec
+          ref: ${{ needs.check.outputs.version }}
+          submodules: true
+
+      - name: Patch source
+        run: |
+          wget -qO - https://github.com/loong64/torchcodec/raw/refs/heads/main/patch_loong64.patch | git apply
+          sed -i 's/requires = \["/requires = ["pybind11", "torch>=2.11", "/g' pyproject.toml
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Build wheels
+        uses: loong64/cibuildwheel@v4.1.0
+        env:
+          CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
+          CIBW_ARCHS: loongarch64
+          CIBW_BUILD: ${{ matrix.platform }}
+          CIBW_BUILD_FRONTEND: "build"
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_BEFORE_BUILD_LINUX: >
+            pip install https://github.com/loong64/auditwheel/releases/download/6.2.0/auditwheel-6.2.0-py3-none-any.whl
+          CIBW_ENVIRONMENT_LINUX: >
+            ENABLE_CUDA=0
+            BUILD_VERSION=${{ env.BUILD_VERSION }}
+            BUILD_AGAINST_ALL_FFMPEG_FROM_S3=1
+            PIP_EXTRA_INDEX_URL="https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple"
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            mkdir -p dist {dest_dir} &&
+            cp -f {wheel} dist &&
+            for pkg in dist/*-linux_*.whl; do
+              if [[ ! -e $pkg ]]; then
+                continue
+              fi
+              abs_pkg=$(realpath $pkg)
+              repair_manylinux_2_38.sh $abs_pkg
+            done &&
+            cp -f dist/*.whl {dest_dir}
+          CIBW_TEST_SKIP: "*"
+
+      - name: Upload wheels
+        run: |
+          pip install twine==6.0.1
+          for file in wheelhouse/*.whl; do
+            twine upload --repository-url https://gitlab.com/api/v4/projects/65746188/packages/pypi $file || true
+          done
+        env:
+          TWINE_USERNAME: ${{ github.repository_owner }}
+          TWINE_PASSWORD: ${{ secrets.GL_TOKEN }}
+
+      - name: Upload release
+        run:
+          gh release upload ${{ needs.check.outputs.version }} -R ${{ github.repository }} wheelhouse/*.whl --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
