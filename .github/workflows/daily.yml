@@ -96,7 +96,7 @@ jobs:
       - name: Patch source
         run: |
           wget -qO - https://github.com/loong64/torchcodec/raw/refs/heads/main/patch_loong64.patch | git apply
-          sed -i 's/requires = \["/requires = ["pybind11", "torch>=2.11", "/g' pyproject.toml
+          sed -i 's/requires = \["/requires = ["pybind11", "torch", "/g' pyproject.toml
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
