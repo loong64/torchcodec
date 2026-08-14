@@ -128,6 +128,7 @@ jobs:
               abs_pkg=$(realpath $pkg)
               repair_manylinux_2_38.sh $abs_pkg
             done &&
+            bash packaging/post_build_script.sh &&
             cp -f dist/*.whl {dest_dir}
           CIBW_TEST_SKIP: "*"
 

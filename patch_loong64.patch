@@ -1,3 +1,82 @@
+diff --git a/packaging/check_glibcxx.py b/packaging/check_glibcxx.py
+index 4632174..72f4411 100644
+--- a/packaging/check_glibcxx.py
++++ b/packaging/check_glibcxx.py
+@@ -43,7 +43,7 @@ import sys
+ if len(sys.argv) != 2:
+     raise ValueError("Wrong usage: python check_glibcxx.py <str_with_symbols>.")
+ 
+-MAX_ALLOWED = (3, 4, 24)
++MAX_ALLOWED = (3, 4, 30)
+ 
+ symbol_matches = sys.argv[1].split("\n")
+ all_symbols = set()
+diff --git a/packaging/repair_wheel.py b/packaging/repair_wheel.py
+index a2c4c43..0482f59 100644
+--- a/packaging/repair_wheel.py
++++ b/packaging/repair_wheel.py
+@@ -352,6 +352,47 @@ def bundle_third_party_licenses():
+                     collected[f"{dest_stem}.{f.name}"] = f
+         return collected
+ 
++    def _resolve_system_licenses():
++        """Map dest filename -> source path for system-provided image libs.
++
++        Linux distributions commonly install package license texts under
++        /usr/share/licenses/<package>/.  Unlike the conda metadata, these
++        locations are not tied to the exact binary build, but they let wheel
++        repair run in system-package environments that do not define
++        CONDA_PREFIX.
++        """
++        # logical lib -> (dest filename stem, system package license directory).
++        wanted = {
++            "libjpeg-turbo": (
++                "LICENSE.libjpeg-turbo",
++                Path("/usr/share/licenses/libjpeg-turbo"),
++            ),
++            "libpng": ("LICENSE.libpng", Path("/usr/share/licenses/libpng")),
++            "zlib": ("LICENSE.zlib", Path("/usr/share/licenses/zlib")),
++            "libwebp": ("LICENSE.libwebp", Path("/usr/share/licenses/libwebp")),
++        }
++
++        collected = {}
++        for logical, (dest_stem, lic_dir) in wanted.items():
++            src_files = (
++                sorted(f for f in lic_dir.iterdir() if f.is_file())
++                if lic_dir.is_dir()
++                else []
++            )
++            if not src_files:
++                raise RuntimeError(
++                    f"Could not find system license files for {logical} under "
++                    f"{lic_dir}."
++                )
++            # A package usually ships a single license file; if it ships several,
++            # keep them all, suffixed with their original name.
++            if len(src_files) == 1:
++                collected[dest_stem] = src_files[0]
++            else:
++                for f in src_files:
++                    collected[f"{dest_stem}.{f.name}"] = f
++        return collected
++
+     def _resolve_avif_licenses():
+         """Map dest filename -> source path for the libavif stack (libavif
+         itself, plus dav1d and libyuv which are statically embedded inside
+@@ -372,7 +413,12 @@ def bundle_third_party_licenses():
+         return {f.name: f for f in sorted(dirs[0].iterdir()) if f.is_file()}
+ 
+     run([sys.executable, "-m", "pip", "install", "-U", "wheel"])
+-    base_licenses = {**_resolve_conda_licenses(), **_resolve_avif_licenses()}
++    resolve_image_licenses = (
++        _resolve_conda_licenses
++        if os.environ.get("CONDA_PREFIX")
++        else _resolve_system_licenses
++    )
++    base_licenses = {**resolve_image_licenses(), **_resolve_avif_licenses()}
+     print("Third-party license files to bundle:")
+     for name, src in sorted(base_licenses.items()):
+         print(f"  {name} <- {src}")
 diff --git a/src/torchcodec/_core/CMakeLists.txt b/src/torchcodec/_core/CMakeLists.txt
 index 1bcb5f8..e3a5e1a 100644
 --- a/src/torchcodec/_core/CMakeLists.txt
