@@ -96,7 +96,7 @@ jobs:
       - name: Patch source
         run: |
           wget -qO - https://github.com/loong64/torchcodec/raw/refs/heads/main/patch_loong64.patch | git apply
-          sed -i 's/requires = \["/requires = ["pybind11", "torch", "/g' pyproject.toml
+          sed -i 's/requires = \["/requires = ["torch", "/g' pyproject.toml
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
@@ -107,8 +107,10 @@ jobs:
           CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
           CIBW_ARCHS: loongarch64
           CIBW_BUILD: ${{ matrix.platform }}
-          CIBW_BUILD_FRONTEND: "build"
+          # CIBW_BUILD_FRONTEND: "build"
           CIBW_BUILD_VERBOSITY: 1
+          CIBW_BEFORE_ALL_LINUX: >
+            yum install -y libjpeg-turbo-devel libpng-devel libwebp-devel libheif-devel
           CIBW_BEFORE_BUILD_LINUX: >
             pip install https://github.com/loong64/auditwheel/releases/download/6.2.0/auditwheel-6.2.0-py3-none-any.whl
           CIBW_ENVIRONMENT_LINUX: >

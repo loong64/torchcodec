@@ -1,13 +1,12 @@
-# Taken and adapted from torchaudio.
-# Ref: https://github.com/pytorch/audio/blob/main/.github/workflows/ffmpeg.yml
-# This job is not directly related to regular CI pipeline.
-# It is intended to create FFmpeg binaries that we upload on S3,
-# which then will be used during all the build process in CI or local.
+# This job builds a *decode-only* libavif (dav1d statically embedded, no encoders
+# and no CLI apps) from source, which we upload to S3 and then link against
+# during wheel builds. This lets us bundle a tiny self-contained libavif.so
+# instead of conda-forge's libavif, which drags in ~20MB of unused AV1 encoder
+# libraries.
 #
-# This job does not include the uploading part.
-# Upload needs to be done manually, and it should be done only once
-# per new major release of FFmepg.
-name: Build non-GPL FFmpeg from source
+# Upload to S3 needs to be done manually, and it should be done only once per
+# new libavif version.
+name: Build decode-only libavif from source
 
 on:
   workflow_dispatch:
@@ -25,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       torchcodec_tag: ${{ steps.get-version.outputs.torchcodec_tag }}
-      ffmpeg_version: ${{ steps.get-version.outputs.ffmpeg_version }}
+      libavif_version: ${{ steps.get-version.outputs.libavif_version }}
 
     steps:
       - name: Get Version
@@ -40,20 +39,20 @@ jobs:
             exit 1
           fi
 
-          version=$(curl --retry 10 -sSL https://github.com/meta-pytorch/torchcodec/raw/refs/tags/${tag}/src/torchcodec/_core/fetch_and_expose_non_gpl_ffmpeg_libs.cmake | grep -oP 'torchcodec/ffmpeg/\K[0-9-]+')
+          version=$(curl --retry 10 -sSL https://github.com/meta-pytorch/torchcodec/raw/refs/tags/${tag}/src/torchcodec/_core/fetch_avif_from_s3.cmake | grep -oP 'torchcodec/libavif/\K[0-9-]+')
           if [ -z "${version}" ] || [ "${version}" == "null" ]; then
             echo "Failed to get version"
             exit 1
           fi
 
           echo "torchcodec_tag=${tag}" >> $GITHUB_OUTPUT
-          echo "ffmpeg_version=${version}" >> $GITHUB_OUTPUT
+          echo "libavif_version=${version}" >> $GITHUB_OUTPUT
           echo ""
           echo "==== Build Args ===="
           echo "torchcodec: ${tag}"
-          echo "ffmpeg: ${version}"
+          echo "libavif: ${version}"
 
-  LGPL-Linux-loongarch64:
+  libavif-Linux-loongarch64:
     runs-on: ubuntu-latest
     needs: Get-Version
     env:
@@ -61,41 +60,44 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ffmpeg-version: ["4.4.4", "5.1.4", "6.1.1", "7.0.1", "8.0", "9.0"]
+        libavif-version: ["1.4.2"]
     
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ffmpeg
+          ref: libavif
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
 
-      - name: Build ffmpeg
+      - name: Build libavif
         run: |
           mkdir -p packaging
-          rm -f packaging/build_ffmpeg.sh
-          wget -qO packaging/build_ffmpeg.sh https://github.com/meta-pytorch/torchcodec/raw/refs/tags/${torchcodec_tag}/packaging/build_ffmpeg.sh
-          sudo chmod +x packaging/build_ffmpeg.sh
+          rm -f packaging/build_libavif.sh
+          wget -qO packaging/build_libavif.sh https://github.com/meta-pytorch/torchcodec/raw/refs/tags/${torchcodec_tag}/packaging/build_libavif.sh
+          sudo chmod +x packaging/build_libavif.sh
+
+          # ERROR: no toolchain provisioning for Linux-loongarch64
+          sed -i '/^missing=false$/a yum install -y ninja-build meson\n' packaging/build_libavif.sh
 
           docker run --rm \
             --platform linux/loong64 \
             --volume "$(pwd):/io" \
-            --env "FFMPEG_VERSION=${{ matrix.ffmpeg-version }}" \
-            --env "FFMPEG_ROOT=/io/ffmpeg" \
+            --env "LIBAVIF_VERSION=${{ matrix.libavif-version }}" \
+            --env "LIBAVIF_ROOT=/io/libavif" \
             --workdir /io \
             ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64 \
-            /io/packaging/build_ffmpeg.sh
+            /io/packaging/build_libavif.sh
 
-          tar -cf ffmpeg.tar.gz ffmpeg/include ffmpeg/lib
-          mv ffmpeg.tar.gz ${{ matrix.ffmpeg-version }}.tar.gz
+          tar -cf libavif.tar.gz libavif/include libavif/lib libavif/licenses
+          mv libavif.tar.gz ${{ matrix.libavif-version }}.tar.gz
 
-      - name: Upload FFmpeg Binaries
+      - name: Upload libavif Binaries
         uses: actions/upload-artifact@v7
         with:
-          name: ffmpeg-${{ matrix.ffmpeg-version }}
-          path: "${{ matrix.ffmpeg-version }}.tar.gz"
+          name: libavif-${{ matrix.libavif-version }}
+          path: "${{ matrix.libavif-version }}.tar.gz"
           if-no-files-found: error
           retention-days: 1
 
@@ -103,14 +105,14 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - Get-Version
-      - LGPL-Linux-loongarch64
+      - libavif-Linux-loongarch64
     env:
-      ffmpeg_version: ${{ needs.Get-Version.outputs.ffmpeg_version }}
+      libavif_version: ${{ needs.Get-Version.outputs.libavif_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ffmpeg
+          ref: libavif
       
       - name: Setup Git
         run: |
@@ -120,16 +122,16 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
-          path: ffmpeg
-          pattern: ffmpeg-*
+          path: libavif
+          pattern: libavif-*
           merge-multiple: true
 
       - name: Upload artifacts
         run: |
-          artifact_dir="${ffmpeg_version}"
+          artifact_dir="${libavif_version}"
           rm -rf "${artifact_dir}/linux_loongarch64"
           mkdir -p "${artifact_dir}"
-          mv ffmpeg "${artifact_dir}/linux_loongarch64"
+          mv libavif "${artifact_dir}/linux_loongarch64"
           git add .
-          git commit -m "Update FFmpeg binaries ${ffmpeg_version}"
-          git push origin ffmpeg
+          git commit -m "Update libavif binaries ${libavif_version}"
+          git push origin libavif
